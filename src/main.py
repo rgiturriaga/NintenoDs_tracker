@@ -8,7 +8,7 @@ def run_price_monitor():
     """
     # 1. Configuration: Change this URL to switch between eBay or Mercado Libre
     target_url = "https://listado.mercadolibre.com.mx/nintendo-ds-lite"
-    max_price = 10000.0 # Budget in your local currency
+    max_price = 1000.0 # Budget in your local currency
     check_interval = 3600 
 
     print(f"[*] Starting monitor for: {target_url}")
@@ -35,8 +35,9 @@ def run_price_monitor():
                     current_price = float(clean_price)
                     print(f"[DEBUG] Found: {product['name']} at ${current_price}")
                     if current_price <= max_price:
+                        # Using HTML tags instead of Markdown
                         message = (
-                            f"🎮 **New Deal Found!**\n\n"
+                            f"<b>🎮 New Deal Found!</b>\n\n"
                             f"Product: {product['name']}\n"
                             f"Price: ${current_price}\n"
                             f"Link: {product.get('link', target_url)}"
