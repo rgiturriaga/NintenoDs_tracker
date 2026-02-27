@@ -39,33 +39,30 @@ class ProductScraper:
         soup = BeautifulSoup(html_content, 'html.parser')
         products = []
         
-        # 1. Buscamos primero todos los elementos que tienen el precio
-        price_elements = soup.find_all('span', class_='andes-money-amount__fraction')
+        # Target the main product cards
+        items = soup.find_all(['div', 'li'], class_=['poly-card', 'ui-search-result__wrapper'])
 
-        for price_element in price_elements:
-            # 2. Subimos al contenedor principal (el padre) de este precio
-            # Usamos un try/except porque a veces el precio no tiene un padre con título
-            try:
-                # 'parents' nos permite subir niveles en el HTML hasta encontrar algo
-                container = price_element.find_parent('div', class_='ui-search-result__wrapper') or \
-                            price_element.find_parent('li')
-                
-                if container:
-                    name = container.find(['h2', 'h3']) # Buscamos h2 o h3
-                    link = container.find('a')
-                    
-                    if name and link:
-                        products.append({
-                            "name": name.get_text().strip(),
-                            "price": price_element.get_text().strip(),
-                            "link": link['href']
-                        })
-            except Exception:
-                continue
-        # Debug: ver qué está viendo el bot
-        print("[DEBUG] Encabezados encontrados:")
-        all_h2 = soup.find_all('h2')
-        for i, h in enumerate(all_h2[:7]): # Imprimir solo los 7 primeros
-            print(f"Header {i}: {h.get_text().strip()}")
-        print(f"[*] Success! Found {len(products)} products using proximity search.")
+        for item in items:
+            name_element = item.find('a', class_='poly-component__title') or item.find('h2')
+            
+            # CRITICAL FIX: We look specifically for the metadata price container
+            # This avoids picking up 'monthly installments' or 'discount percentages'
+            price_container = item.find('div', class_='poly-price__current') or \
+                              item.find('div', class_='ui-search-price__second-line')
+            
+            if price_container:
+                price_element = price_container.find('span', class_='andes-money-amount__fraction')
+            else:
+                price_element = item.find('span', class_='andes-money-amount__fraction')
+
+            link_element = item.find('a', href=True)
+
+            if name_element and price_element:
+                price_text = price_element.get_text().strip()
+                products.append({
+                    "name": name_element.get_text().strip(),
+                    "price": price_text,
+                    "link": link_element['href'] if link_element else "No link"
+                })
+        
         return products
