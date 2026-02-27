@@ -11,12 +11,10 @@ class ProductScraper:
     """
     def __init__(self, target_url):
         self.target_url = target_url
-        
-        # Configure Chrome options
         self.chrome_options = Options()
-        self.chrome_options.add_argument("--headless") # Run without opening a window
+        # COMENTA ESTA LÍNEA PARA VER EL NAVEGADOR (Solo para pruebas)
+        # self.chrome_options.add_argument("--headless") 
         self.chrome_options.add_argument("--no-sandbox")
-        self.chrome_options.add_argument("--disable-dev-shm-usage")
         self.chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
 
     def fetch_page_content(self):
@@ -41,20 +39,33 @@ class ProductScraper:
         soup = BeautifulSoup(html_content, 'html.parser')
         products = []
         
-        # New 2026 generic selectors
-        items = soup.select('li.ui-search-layout__item')
+        # 1. Buscamos primero todos los elementos que tienen el precio
+        price_elements = soup.find_all('span', class_='andes-money-amount__fraction')
 
-        for item in items:
-            name = item.find('h2')
-            price = item.find('span', class_='andes-money-amount__fraction')
-            link = item.find('a')
-
-            if name and price:
-                products.append({
-                    "name": name.get_text().strip(),
-                    "price": price.get_text().strip(),
-                    "link": link['href'] if link else "No link"
-                })
-        
-        print(f"[*] Success! Found {len(products)} products using Selenium.")
+        for price_element in price_elements:
+            # 2. Subimos al contenedor principal (el padre) de este precio
+            # Usamos un try/except porque a veces el precio no tiene un padre con título
+            try:
+                # 'parents' nos permite subir niveles en el HTML hasta encontrar algo
+                container = price_element.find_parent('div', class_='ui-search-result__wrapper') or \
+                            price_element.find_parent('li')
+                
+                if container:
+                    name = container.find(['h2', 'h3']) # Buscamos h2 o h3
+                    link = container.find('a')
+                    
+                    if name and link:
+                        products.append({
+                            "name": name.get_text().strip(),
+                            "price": price_element.get_text().strip(),
+                            "link": link['href']
+                        })
+            except Exception:
+                continue
+        # Debug: ver qué está viendo el bot
+        print("[DEBUG] Encabezados encontrados:")
+        all_h2 = soup.find_all('h2')
+        for i, h in enumerate(all_h2[:7]): # Imprimir solo los 7 primeros
+            print(f"Header {i}: {h.get_text().strip()}")
+        print(f"[*] Success! Found {len(products)} products using proximity search.")
         return products
