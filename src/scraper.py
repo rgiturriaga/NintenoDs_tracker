@@ -1,8 +1,8 @@
 import time
 from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.chrome.options import Options
-from webdriver_manager.chrome import ChromeDriverManager
+from selenium.webdriver.firefox.service import Service
+from selenium.webdriver.firefox.options import Options
+from webdriver_manager.firefox import GeckoDriverManager
 from bs4 import BeautifulSoup
 
 class ProductScraper:
@@ -11,17 +11,16 @@ class ProductScraper:
     """
     def __init__(self, target_url):
         self.target_url = target_url
-        self.chrome_options = Options()
-        # COMENTA ESTA LÍNEA PARA VER EL NAVEGADOR (Solo para pruebas)
-        # self.chrome_options.add_argument("--headless") 
-        self.chrome_options.add_argument("--no-sandbox")
-        self.chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
+        self.firefox_options = Options()
+        # ENABLE HEADLESS MODE FOR ARCH LINUX
+        self.firefox_options.add_argument("--headless") 
+        self.firefox_options.set_preference("general.useragent.override", "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:123.0) Gecko/20100101 Firefox/123.0")
 
     def fetch_page_content(self):
         """
         Opens a real browser to render the page and get the HTML.
         """
-        driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=self.chrome_options)
+        driver = webdriver.Firefox(service=Service(GeckoDriverManager().install()), options=self.firefox_options)
         try:
             print(f"[*] Opening browser to: {self.target_url}")
             driver.get(self.target_url)
