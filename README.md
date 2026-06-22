@@ -1,6 +1,6 @@
 # Nintendo DS Price Tracker
 
-[![Python Version](https://img.shields.io/badge/python-3.x-blue.svg)](https://python.org)
+[![Python Version](https://img.shields.io/badge/python-3.14.6-blue.svg)](https://python.org)
 [![Testing](https://img.shields.io/badge/tests-pytest-green.svg)](https://pytest.org)
 [![License](https://img.shields.io/badge/license-MIT-purple.svg)](LICENSE)
 
