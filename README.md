@@ -4,7 +4,7 @@ A professional web scraping tool designed to monitor online marketplaces for aff
 
 ## Tech Stack
 
-- **Language:** Python 3.x
+- **Language:** Python 3.14.6
 - **Libraries:** BeautifulSoup4, Requests, Python-dotenv
 - **Automation:** Telegram Bot API
 - **Version Control:** Git & GitHub
