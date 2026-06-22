@@ -1,10 +1,10 @@
-# 📖 Nintendo DS Price Tracker: Developer Guide
+# Nintendo DS Price Tracker: Developer Guide
 
 This developer guide describes the architectural choices, security principles, resource lifecycle, and patterns to extend the codebase for new marketplaces.
 
 ---
 
-## 🏗️ Design Patterns & Code Style
+## Design Patterns & Code Style
 
 The project is structured with modular design principles:
 - **Separation of Concerns**: [scraper.py](file:///home/devil_hayabusa/Proyects/NintenoDs_tracker/src/scraper.py) manages browser automation and parsing, [utils.py](file:///home/devil_hayabusa/Proyects/NintenoDs_tracker/src/utils.py) manages external API notification services, and [main.py](file:///home/devil_hayabusa/Proyects/NintenoDs_tracker/src/main.py) controls the configuration and monitoring loop execution.
@@ -17,7 +17,7 @@ The project is structured with modular design principles:
 
 ---
 
-## 🛡️ Security by Design
+## Security by Design
 
 To ensure this project is portfolio-safe:
 1. **Decoupled Variables**: Configuration values and secrets are stored in a root [.env](file:///home/devil_hayabusa/Proyects/NintenoDs_tracker/.env) file. The code uses `load_dotenv` to read them via the system environment.
@@ -27,7 +27,7 @@ To ensure this project is portfolio-safe:
 
 ---
 
-## 🔋 Resource Lifecycle & Cleanups
+## Resource Lifecycle & Cleanups
 
 Automated browsers can easily cause resource leaks if not cleaned up properly (especially on headless CLI setups).
 - **Webdriver Terminations**: The `fetch_page_content` method wraps the webdriver lifecycle in a `try...finally` block. Regardless of network dropouts or BeautifulSoup parsing exceptions, `driver.quit()` is guaranteed to execute, terminating the browser process.
@@ -35,7 +35,7 @@ Automated browsers can easily cause resource leaks if not cleaned up properly (e
 
 ---
 
-## 📈 Extending the Scraper
+## Extending the Scraper
 
 To add support for a new marketplace (e.g., eBay or Amazon):
 
