@@ -1,10 +1,5 @@
-import sys
-import os
 import pytest
 from bs4 import BeautifulSoup
-
-# Add src to Python path
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../src')))
 
 from scraper import ProductScraper
 

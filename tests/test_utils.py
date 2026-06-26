@@ -1,10 +1,5 @@
-import sys
-import os
 import pytest
 import requests
-
-# Add src to Python path
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../src')))
 
 import utils
 
