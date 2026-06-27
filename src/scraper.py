@@ -1,3 +1,4 @@
+import os
 import time
 import logging
 from selenium import webdriver
@@ -8,6 +9,26 @@ from bs4 import BeautifulSoup
 
 # Set up logger
 logger = logging.getLogger(__name__)
+
+# Words that identify non-console listings (games, accessories, spare parts).
+# Any product whose name contains one of these terms is discarded.
+BLACKLIST_KEYWORDS: frozenset[str] = frozenset({
+    # Games / software
+    "juego", "game", "games", "cartucho", "cartridge", "rom",
+    # Accessories / cases
+    "accesorio", "funda", "estuche", "bolsa", "mochila",
+    "case", "bag", "protector", "cover", "skin",
+    # Chargers / cables
+    "cargador", "charger", "cable", "adaptador", "adapter", "fuente",
+    # Spare parts / repairs
+    "repuesto", "refaccion", "pantalla", "screen", "lcd",
+    "bateria", "battery", "boton", "button", "bisagra", "hinge",
+    "bocina", "speaker", "microfono", "microphone",
+    # Stylus
+    "stylus", "lapiz", "lapicero",
+    # Documentation
+    "manual", "instrucciones",
+})
 
 class ProductScraper:
     """High-level scraper using Selenium to bypass bot detection.
@@ -41,11 +62,12 @@ class ProductScraper:
         logger.info(f"Opening headless Firefox browser to: {self.target_url}")
         
         try:
-            # Automatic driver installation & browser initialization
-            driver = webdriver.Firefox(
-                service=Service(GeckoDriverManager().install()), 
-                options=self.firefox_options
-            )
+            # If a pre-installed geckodriver is available (e.g. inside Docker), use it
+            # directly to avoid a network download at startup. Fall back to
+            # webdriver_manager for local development environments.
+            gecko_path = os.getenv("GECKODRIVER_PATH")
+            service = Service(gecko_path) if gecko_path else Service(GeckoDriverManager().install())
+            driver = webdriver.Firefox(service=service, options=self.firefox_options)
         except Exception as init_error:
             logger.error(f"Failed to initialize Firefox WebDriver: {init_error}", exc_info=True)
             return None
@@ -82,11 +104,23 @@ class ProductScraper:
 
         for item in items:
             name_element = item.find('a', class_='poly-component__title') or item.find('h2')
-            
+
+            if not name_element:
+                continue
+
+            name_text = name_element.get_text().strip()
+
+            # Skip games, accessories, spare parts, etc.
+            if self._is_excluded(name_text):
+                logger.debug(f"Excluded by blacklist: '{name_text}'")
+                continue
+
             # Avoid picking up monthly installments or discount percentages
-            price_container = item.find('div', class_='poly-price__current') or \
-                              item.find('div', class_='ui-search-price__second-line')
-            
+            price_container = (
+                item.find('div', class_='poly-price__current')
+                or item.find('div', class_='ui-search-price__second-line')
+            )
+
             if price_container:
                 price_element = price_container.find('span', class_='andes-money-amount__fraction')
             else:
@@ -94,15 +128,27 @@ class ProductScraper:
 
             link_element = item.find('a', href=True)
 
-            if name_element and price_element:
+            if price_element:
                 price_text = price_element.get_text().strip()
                 products.append({
-                    "name": name_element.get_text().strip(),
+                    "name": name_text,
                     "price": price_text,
-                    "link": link_element['href'] if link_element else self.target_url
+                    "link": link_element['href'] if link_element else self.target_url,
                 })
-        
+
         return products
+
+    def _is_excluded(self, name: str) -> bool:
+        """Returns True if the product name matches a blacklisted keyword.
+
+        Args:
+            name (str): The product listing name to evaluate.
+
+        Returns:
+            bool: True when the product should be discarded, False when it can pass.
+        """
+        name_lower = name.lower()
+        return any(keyword in name_lower for keyword in BLACKLIST_KEYWORDS)
 
     def analyze_prices(self, html_content: str) -> list:
         """Generic fallback parser or placeholder for other marketplaces like eBay.

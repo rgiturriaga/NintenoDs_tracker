@@ -1,0 +1,27 @@
+# Version control
+.git
+.gitignore
+
+# Python artifacts
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache
+.mypy_cache
+
+# Local virtual environment
+venv/
+
+# Tests (not needed at runtime)
+tests/
+
+# IDE / editor configs
+.vscode/
+.idea/
+
+# Agent configs
+.agents/
+
+# Secrets: never bake into the image, inject at runtime with --env-file
+.env
