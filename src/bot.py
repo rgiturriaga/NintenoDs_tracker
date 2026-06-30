@@ -34,6 +34,7 @@ class MonitorController:
     def __init__(self) -> None:
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
+        self._scan_now_event = threading.Event()
         self.config: dict = {
             "target_url": os.getenv(
                 "TARGET_URL",
@@ -70,9 +71,10 @@ class MonitorController:
         if self.is_running:
             return False
         self._stop_event.clear()
+        self._scan_now_event.clear()
         self._thread = threading.Thread(
             target=run_monitor_loop,
-            args=(self._stop_event, self.config),
+            args=(self._stop_event, self._scan_now_event, self.config),
             daemon=True,
             name="monitor-thread",
         )
@@ -86,6 +88,16 @@ class MonitorController:
             return False
         self._stop_event.set()
         logger.info("Stop signal sent to monitor thread.")
+        return True
+
+    def trigger_scan(self) -> bool:
+        """Wakes the monitor immediately to run an unscheduled scan.
+        Returns False if the monitor is not running or is already scanning.
+        """
+        if not self.is_running:
+            return False
+        self._scan_now_event.set()
+        logger.info("Manual scan triggered.")
         return True
 
     def set_max_price(self, price: float) -> None:
@@ -154,6 +166,21 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     )
 
 
+async def cmd_scan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Triggers an immediate unscheduled scan without altering the daily schedule."""
+    if not _is_authorized(update):
+        return
+
+    if _controller.trigger_scan():
+        await update.message.reply_text(
+            "Manual scan triggered. Results will arrive as alerts if any deal is found."
+        )
+    else:
+        await update.message.reply_text(
+            "The monitor is not running. Use /start first."
+        )
+
+
 async def cmd_setprice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Changes the maximum price threshold. Usage: /setprice 800"""
     if not _is_authorized(update):
@@ -184,6 +211,7 @@ def main() -> None:
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("stop", cmd_stop))
     app.add_handler(CommandHandler("status", cmd_status))
+    app.add_handler(CommandHandler("scan", cmd_scan))
     app.add_handler(CommandHandler("setprice", cmd_setprice))
 
     logger.info("Telegram bot started with polling...")

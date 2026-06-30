@@ -43,15 +43,21 @@ def _next_scan_datetime(window_start_h: int, window_end_h: int) -> datetime.date
     return random_moment_on((now + datetime.timedelta(days=1)).date())
 
 
-def run_monitor_loop(stop_event: threading.Event, config: dict) -> None:
+def run_monitor_loop(
+    stop_event: threading.Event,
+    scan_now_event: threading.Event,
+    config: dict,
+) -> None:
     """Price monitoring loop. Runs until stop_event is set.
 
     Schedules exactly one scan per day at a random time within the configured
     window. The next scan time is stored in config['next_scan_at'] so the
     Telegram /status command can display it.
+    Wakes up immediately if scan_now_event is set (triggered by /scan command).
 
     Args:
         stop_event (threading.Event): Set this from outside to stop the loop cleanly.
+        scan_now_event (threading.Event): Set this from outside to trigger an immediate scan.
         config (dict): Runtime configuration with keys:
             - target_url (str)
             - max_price (float)
@@ -79,10 +85,19 @@ def run_monitor_loop(stop_event: threading.Event, config: dict) -> None:
             f"(sleeping {int(wait_seconds)}s)."
         )
 
-        # Sleep until then; wakes immediately if stop_event is set.
-        stop_event.wait(timeout=wait_seconds)
+        # Wait until the scheduled time, a stop signal, or a manual /scan trigger.
+        # Checks every second so it reacts instantly to either event.
+        while not stop_event.is_set() and not scan_now_event.is_set():
+            remaining = (next_dt - datetime.datetime.now()).total_seconds()
+            if remaining <= 0:
+                break
+            stop_event.wait(timeout=min(1.0, remaining))
+
         if stop_event.is_set():
             break
+
+        # Consume the manual trigger so it does not fire again immediately
+        scan_now_event.clear()
 
         # --- Run scan ---
         config["next_scan_at"] = None
@@ -143,4 +158,5 @@ if __name__ == "__main__":
     }
 
     stop_event = threading.Event()
-    run_monitor_loop(stop_event, config)
+    scan_now_event = threading.Event()
+    run_monitor_loop(stop_event, scan_now_event, config)
