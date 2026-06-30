@@ -26,6 +26,7 @@ services:
         limits:
           cpus: "0.50"
           memory: 512M
+          pids: 100
         reservations:
           # Reserve a baseline so the OOM killer does not starve the bot
           # during memory pressure from other processes on the host.
@@ -64,10 +65,6 @@ services:
     # 128 MB is sufficient for a single headless session.
     shm_size: "128m"
 
-    # Limit the number of processes the container can create.
-    # Prevents fork-bomb attacks from consuming all host PIDs.
-    # Normal operation: Python (~10 threads) + Firefox (~15 procs) = ~30.
-    pids_limit: 100
 
     # ---------------------------------------------------------------
     # Log rotation
