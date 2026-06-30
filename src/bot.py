@@ -39,8 +39,10 @@ class MonitorController:
                 "TARGET_URL",
                 "https://listado.mercadolibre.com.mx/nintendo-ds-lite",
             ),
-            "max_price": self._parse_float("MAX_PRICE", 1000.0),
-            "check_interval": self._parse_int("CHECK_INTERVAL", 3600),
+            "max_price":         self._parse_float("MAX_PRICE", 1000.0),
+            "scan_window_start": self._parse_int("SCAN_WINDOW_START", 0),
+            "scan_window_end":   self._parse_int("SCAN_WINDOW_END", 17),
+            "next_scan_at":      None,  # updated by the monitor loop; read by /status
         }
 
     @staticmethod
@@ -111,7 +113,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(
             f"Monitor started.\n"
             f"Max price: ${cfg['max_price']:,.2f}\n"
-            f"Check interval: {cfg['check_interval']}s\n"
+            f"Scan window: {cfg['scan_window_start']:02d}:00 - {cfg['scan_window_end']:02d}:00 (once per day)\n"
             f"URL: {cfg['target_url']}"
         )
     else:
@@ -138,11 +140,15 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
     state = "Running" if _controller.is_running else "Stopped"
     cfg = _controller.config
+    next_scan = cfg.get("next_scan_at")
+    next_scan_str = next_scan.strftime("%Y-%m-%d %H:%M") if next_scan else "Scanning now..." if _controller.is_running else "Not scheduled"
+
     await update.message.reply_text(
         f"<b>Monitor Status</b>\n\n"
         f"State: {state}\n"
         f"Max price: ${cfg['max_price']:,.2f}\n"
-        f"Check interval: {cfg['check_interval']}s\n"
+        f"Scan window: {cfg['scan_window_start']:02d}:00 - {cfg['scan_window_end']:02d}:00\n"
+        f"Next scan: {next_scan_str}\n"
         f"URL: {cfg['target_url']}",
         parse_mode="HTML",
     )

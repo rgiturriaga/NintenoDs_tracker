@@ -1,5 +1,6 @@
 import os
 import time
+import random
 import logging
 from selenium import webdriver
 from selenium.webdriver.firefox.service import Service
@@ -52,6 +53,17 @@ class ProductScraper:
             "general.useragent.override", 
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:123.0) Gecko/20100101 Firefox/123.0"
         )
+        # Disable Firefox's internal multi-process content sandbox.
+        # In a hardened container (cap_drop: ALL, read_only filesystem) the
+        # sandbox requires kernel capabilities we intentionally do not grant.
+        # The Docker container itself is the security boundary.
+        self.firefox_options.set_preference("security.sandbox.content.level", 0)
+        self.firefox_options.set_preference("security.sandbox.gpu.level", 0)
+        # Hide the navigator.webdriver property that anti-bot systems (e.g. Akamai)
+        # check to detect Selenium-controlled browsers. This makes the session
+        # look indistinguishable from a regular manual browsing session.
+        self.firefox_options.set_preference("dom.webdriver.enabled", False)
+        self.firefox_options.set_preference("useAutomationExtension", False)
 
     def fetch_page_content(self) -> str:
         """Opens a headless browser to render the page and get the HTML.
@@ -74,8 +86,12 @@ class ProductScraper:
 
         try:
             driver.get(self.target_url)
-            # Wait for JavaScript to load product listings
-            time.sleep(5) 
+            # Wait a randomized amount of time for JS to render product listings.
+            # A fixed delay (e.g. always 5s) creates a detectable timing fingerprint;
+            # a human never loads pages at perfectly consistent intervals.
+            wait_seconds = random.uniform(4.0, 9.0)
+            logger.debug(f"Waiting {wait_seconds:.1f}s for page JS to render...")
+            time.sleep(wait_seconds)
             html = driver.page_source
             logger.info("Successfully fetched page source.")
             return html

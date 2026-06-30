@@ -1,0 +1,81 @@
+services:
+  ds-tracker:
+    build: .
+    container_name: ds-tracker
+
+    # --- Restart policy ---
+    # unless-stopped: restarts on crash AND on server reboot.
+    # Only stays down if you explicitly run `docker compose down`.
+    restart: unless-stopped
+
+    env_file:
+      - .env
+
+    # ---------------------------------------------------------------
+    # Resource limits
+    # ---------------------------------------------------------------
+    # Firefox ESR headless peaks at 150-300 MB on its own.
+    # Adding Python, Selenium and page parsing, the realistic peak
+    # is 380-450 MB. 512 MB is the safe floor; lower to 400 M only
+    # after checking `docker stats ds-tracker` under real load.
+    #
+    # CPU is capped at half a core. Scrapes are infrequent (once per
+    # CHECK_INTERVAL) so 0.5 CPUs is more than enough.
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 512M
+        reservations:
+          # Reserve a baseline so the OOM killer does not starve the bot
+          # during memory pressure from other processes on the host.
+          memory: 128M
+
+    # ---------------------------------------------------------------
+    # Security hardening
+    # ---------------------------------------------------------------
+
+    # Prevent any process inside the container from gaining new privileges
+    # via setuid/setgid binaries or file capabilities.
+    security_opt:
+      - no-new-privileges:true
+
+    # Drop every Linux capability. The bot only does HTTP requests and
+    # file reads — it does not need raw sockets, mounting, or any
+    # kernel-level privilege.
+    cap_drop:
+      - ALL
+
+    # Make the container filesystem read-only. An attacker who gets code
+    # execution cannot write a backdoor, drop a cron job, or modify
+    # the application files on disk.
+    read_only: true
+
+    # Writable in-memory (tmpfs) mounts to satisfy runtime write needs
+    # without touching the host filesystem or a persistent volume.
+    #   /tmp          - Firefox temp files and Selenium socket
+    #   /home/appuser - Firefox profile directory (ephemeral, lost on restart)
+    tmpfs:
+      - /tmp:size=200m,mode=1777
+      - /home/appuser:size=50m,mode=755
+
+    # Firefox uses /dev/shm for shared memory between its processes.
+    # The Docker default of 64 MB can cause page rendering crashes;
+    # 128 MB is sufficient for a single headless session.
+    shm_size: "128m"
+
+    # Limit the number of processes the container can create.
+    # Prevents fork-bomb attacks from consuming all host PIDs.
+    # Normal operation: Python (~10 threads) + Firefox (~15 procs) = ~30.
+    pids_limit: 100
+
+    # ---------------------------------------------------------------
+    # Log rotation
+    # ---------------------------------------------------------------
+    # json-file driver with rotation keeps the server disk clean
+    # on a deployment that runs indefinitely.
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
