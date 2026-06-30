@@ -64,16 +64,24 @@ def run_monitor_loop(
             - scan_window_start (int): Window open hour  (default 0  = midnight)
             - scan_window_end   (int): Window close hour (default 17 = 5 PM)
     """
-    target_url    = config.get("target_url", "https://listado.mercadolibre.com.mx/nintendo-ds-lite")
-    max_price     = config.get("max_price", 1000.0)
-    window_start  = config.get("scan_window_start", 0)
-    window_end    = config.get("scan_window_end", 17)
+    # Support comma-separated URLs so multiple console families can be tracked
+    # in the same scan cycle (e.g. DS family + 3DS family).
+    raw_urls  = config.get("target_url", "https://listado.mercadolibre.com.mx/nintendo-ds")
+    target_urls = [u.strip() for u in raw_urls.split(",") if u.strip()]
+    max_price    = config.get("max_price", 1000.0)
+    window_start = config.get("scan_window_start", 0)
+    window_end   = config.get("scan_window_end", 17)
 
     logger.info(
-        f"Monitor started: {target_url} | max ${max_price} "
-        f"| daily window {window_start:02d}:00 - {window_end:02d}:00"
+        f"Monitor started | max ${max_price} "
+        f"| daily window {window_start:02d}:00 - {window_end:02d}:00 "
+        f"| tracking {len(target_urls)} URL(s)"
     )
-    scraper = ProductScraper(target_url)
+    for url in target_urls:
+        logger.info(f"  -> {url}")
+
+    # Create one scraper instance per URL (each has its own Firefox options)
+    scrapers = [(url, ProductScraper(url)) for url in target_urls]
 
     while not stop_event.is_set():
         # --- Schedule next scan ---
@@ -99,42 +107,47 @@ def run_monitor_loop(
         # Consume the manual trigger so it does not fire again immediately
         scan_now_event.clear()
 
-        # --- Run scan ---
+        # --- Run scan across all configured URLs ---
         config["next_scan_at"] = None
-        logger.info("Scan started.")
+        logger.info(f"Scan started across {len(scrapers)} URL(s).")
 
         try:
-            html_content = scraper.fetch_page_content()
+            all_products = []
+            for url, scraper in scrapers:
+                logger.info(f"Fetching: {url}")
+                html_content = scraper.fetch_page_content()
 
-            if html_content:
-                if "mercadolibre" in target_url:
-                    products = scraper.analyze_merca_libre(html_content)
+                if html_content:
+                    if "mercadolibre" in url:
+                        products = scraper.analyze_merca_libre(html_content)
+                    else:
+                        products = scraper.analyze_prices(html_content)
+                    logger.info(f"  {len(products)} listing(s) after filtering from {url}")
+                    all_products.extend(products)
                 else:
-                    products = scraper.analyze_prices(html_content)
+                    logger.warning(f"Could not fetch content from {url}")
 
-                logger.info(f"Processed {len(products)} console listings after filtering.")
+            logger.info(f"Total listings this cycle: {len(all_products)}")
 
-                for product in products:
-                    try:
-                        clean_price = product["price"].replace("$", "").replace(",", "").strip()
-                        current_price = float(clean_price)
-                        logger.debug(f"Found: '{product['name']}' at ${current_price}")
+            for product in all_products:
+                try:
+                    clean_price = product["price"].replace("$", "").replace(",", "").strip()
+                    current_price = float(clean_price)
+                    logger.debug(f"Found: '{product['name']}' at ${current_price}")
 
-                        if current_price <= max_price:
-                            message = (
-                                f"<b>New Deal Found!</b>\n\n"
-                                f"Product: {product['name']}\n"
-                                f"Price: ${current_price:,.2f}\n"
-                                f"Link: {product.get('link', target_url)}"
-                            )
-                            send_telegram_alert(message)
-                            logger.info(f"Alert sent: '{product['name']}' at ${current_price}")
+                    if current_price <= max_price:
+                        message = (
+                            f"<b>New Deal Found!</b>\n\n"
+                            f"Product: {product['name']}\n"
+                            f"Price: ${current_price:,.2f}\n"
+                            f"Link: {product.get('link', '')}"
+                        )
+                        send_telegram_alert(message)
+                        logger.info(f"Alert sent: '{product['name']}' at ${current_price}")
 
-                    except (ValueError, KeyError) as e:
-                        logger.debug(f"Skipping product due to parse error: {e}")
-                        continue
-            else:
-                logger.warning("Could not fetch page content in this cycle.")
+                except (ValueError, KeyError) as e:
+                    logger.debug(f"Skipping product due to parse error: {e}")
+                    continue
 
         except Exception as e:
             logger.error(f"Unexpected error during scan: {e}", exc_info=True)
