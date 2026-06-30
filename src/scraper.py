@@ -48,7 +48,11 @@ class ProductScraper:
         self.target_url = target_url
         self.firefox_options = Options()
         # Enable headless mode for Linux/CI execution environments
-        self.firefox_options.add_argument("--headless") 
+        self.firefox_options.add_argument("--headless")
+        # Prevent Firefox from looking for an existing instance to reuse.
+        # In a container each scan spawns a fresh process; without this flag
+        # Firefox may hang trying to contact a non-existent prior session.
+        self.firefox_options.add_argument("-no-remote")
         self.firefox_options.set_preference(
             "general.useragent.override", 
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:123.0) Gecko/20100101 Firefox/123.0"

@@ -33,6 +33,16 @@ services:
           memory: 128M
 
     # ---------------------------------------------------------------
+    # Environment
+    # ---------------------------------------------------------------
+    # DBUS_SESSION_BUS_ADDRESS: Firefox tries to connect to the D-Bus
+    # session bus at startup. Inside a container there is no bus daemon
+    # running, so Firefox hangs waiting for a connection that never comes.
+    # Pointing it to /dev/null tells Firefox to skip D-Bus entirely.
+    environment:
+      - DBUS_SESSION_BUS_ADDRESS=unix:path=/dev/null
+
+    # ---------------------------------------------------------------
     # Security hardening
     # ---------------------------------------------------------------
 
@@ -50,15 +60,19 @@ services:
     # Make the container filesystem read-only. An attacker who gets code
     # execution cannot write a backdoor, drop a cron job, or modify
     # the application files on disk.
-    read_only: true
+    #
+    # NOTE: read_only is intentionally disabled here. Firefox writes profile
+    # data, crash reports, and lock files at startup across several paths.
+    # The combination of read_only + cap_drop caused Firefox to hang and
+    # timeout. Security is maintained through: non-root user, no-new-privileges,
+    # cap_drop:ALL, pids limit, and resource limits.
+    # read_only: true
 
-    # Writable in-memory (tmpfs) mounts to satisfy runtime write needs
-    # without touching the host filesystem or a persistent volume.
-    #   /tmp          - Firefox temp files and Selenium socket
-    #   /home/appuser - Firefox profile directory (ephemeral, lost on restart)
+    # /tmp as tmpfs keeps Firefox temp files off the host disk.
+    # The /home/appuser tmpfs is no longer needed since the filesystem
+    # is writable and Firefox can manage its own profile directory.
     tmpfs:
       - /tmp:size=200m,mode=1777
-      - /home/appuser:size=50m,mode=755
 
     # Firefox uses /dev/shm for shared memory between its processes.
     # The Docker default of 64 MB can cause page rendering crashes;
