@@ -14,85 +14,42 @@ services:
     # ---------------------------------------------------------------
     # Resource limits
     # ---------------------------------------------------------------
-    # Firefox ESR headless peaks at 150-300 MB on its own.
-    # Adding Python, Selenium and page parsing, the realistic peak
-    # is 380-450 MB. 512 MB is the safe floor; lower to 400 M only
-    # after checking `docker stats ds-tracker` under real load.
-    #
-    # CPU is capped at half a core. Scrapes are infrequent (once per
-    # CHECK_INTERVAL) so 0.5 CPUs is more than enough.
+    # Without Firefox the memory footprint is tiny: Python + requests +
+    # BeautifulSoup peaks well under 100 MB. 256 MB gives a safe headroom.
     deploy:
       resources:
         limits:
           cpus: "0.50"
-          memory: 512M
-          pids: 100
+          memory: 256M
+          pids: 50
         reservations:
-          # Reserve a baseline so the OOM killer does not starve the bot
-          # during memory pressure from other processes on the host.
-          memory: 128M
-
-    # ---------------------------------------------------------------
-    # Environment
-    # ---------------------------------------------------------------
-    # DBUS_SESSION_BUS_ADDRESS: Firefox tries to connect to the D-Bus
-    # session bus at startup. Inside a container there is no bus daemon
-    # running, so Firefox hangs waiting for a connection that never comes.
-    # Pointing it to /dev/null tells Firefox to skip D-Bus entirely.
-    environment:
-      - DBUS_SESSION_BUS_ADDRESS=unix:path=/dev/null
+          memory: 64M
 
     # ---------------------------------------------------------------
     # Security hardening
     # ---------------------------------------------------------------
 
-    # no-new-privileges: blocks setuid/setgid privilege escalation.
-    # seccomp=unconfined: Docker's default seccomp profile blocks clone3 and
-    # other syscalls Firefox uses to spawn its internal processes, causing
-    # an immediate crash ("Failed to decode response from marionette").
-    # The container remains isolated via cap_drop, non-root user, and limits.
     security_opt:
       - no-new-privileges:true
-      - seccomp=unconfined
 
     # Drop every Linux capability. The bot only does HTTP requests and
-    # file reads — it does not need raw sockets, mounting, or any
-    # kernel-level privilege.
+    # HTML parsing — it requires no kernel privileges whatsoever.
     cap_drop:
       - ALL
-    # SYS_PTRACE is the only capability Firefox needs even with its internal
-    # sandbox disabled. It uses ptrace to monitor its own child processes.
-    cap_add:
-      - SYS_PTRACE
 
-    # Make the container filesystem read-only. An attacker who gets code
+    # The container filesystem is read-only. An attacker who gets code
     # execution cannot write a backdoor, drop a cron job, or modify
-    # the application files on disk.
-    #
-    # NOTE: read_only is intentionally disabled here. Firefox writes profile
-    # data, crash reports, and lock files at startup across several paths.
-    # The combination of read_only + cap_drop caused Firefox to hang and
-    # timeout. Security is maintained through: non-root user, no-new-privileges,
-    # cap_drop:ALL, pids limit, and resource limits.
-    # read_only: true
+    # the application files on disk. Without Firefox this works cleanly
+    # since requests/BeautifulSoup write nothing to disk.
+    read_only: true
 
-    # /tmp as tmpfs keeps Firefox temp files off the host disk.
-    # The /home/appuser tmpfs is no longer needed since the filesystem
-    # is writable and Firefox can manage its own profile directory.
+    # Minimal writable tmpfs for Python's own temp needs.
     tmpfs:
-      - /tmp:size=200m,mode=1777
-
-    # Firefox uses /dev/shm for shared memory between its processes.
-    # The Docker default of 64 MB can cause page rendering crashes;
-    # 128 MB is sufficient for a single headless session.
-    shm_size: "128m"
-
+      - /tmp:size=32m,mode=1777
 
     # ---------------------------------------------------------------
     # Log rotation
     # ---------------------------------------------------------------
-    # json-file driver with rotation keeps the server disk clean
-    # on a deployment that runs indefinitely.
     logging:
       driver: "json-file"
       options:

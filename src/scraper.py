@@ -1,14 +1,8 @@
-import os
-import time
 import random
 import logging
-from selenium import webdriver
-from selenium.webdriver.firefox.service import Service
-from selenium.webdriver.firefox.options import Options
-from webdriver_manager.firefox import GeckoDriverManager
+import requests
 from bs4 import BeautifulSoup
 
-# Set up logger
 logger = logging.getLogger(__name__)
 
 # Words that identify non-console listings (games, accessories, spare parts).
@@ -31,84 +25,78 @@ BLACKLIST_KEYWORDS: frozenset[str] = frozenset({
     "manual", "instrucciones",
 })
 
+# Rotate between a few realistic User-Agent strings to reduce fingerprinting.
+_USER_AGENTS: list[str] = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:123.0) Gecko/20100101 Firefox/123.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7; rv:124.0) Gecko/20100101 Firefox/124.0",
+    "Mozilla/5.0 (X11; Linux x86_64; rv:123.0) Gecko/20100101 Firefox/123.0",
+]
+
+
 class ProductScraper:
-    """High-level scraper using Selenium to bypass bot detection.
+    """Scraper that fetches Mercado Libre listing pages via HTTP requests.
+
+    Mercado Libre uses server-side rendering (Next.js SSR), so product listings
+    are embedded in the initial HTML response and do not require JavaScript
+    execution. Using requests instead of a headless browser avoids the
+    Firefox/geckodriver stack entirely, reducing memory use and removing all
+    container compatibility issues.
 
     Attributes:
-        target_url (str): The URL of the marketplace to scrape.
-        firefox_options (Options): Headless Firefox browser configurations.
+        target_url (str): The marketplace listing URL to scrape.
+        session (requests.Session): Persistent HTTP session with browser headers.
     """
 
     def __init__(self, target_url: str):
-        """Initializes ProductScraper with a target URL and headless Firefox settings.
+        """Initializes the scraper with a target URL and a configured HTTP session.
 
         Args:
             target_url (str): The target marketplace URL.
         """
         self.target_url = target_url
-        self.firefox_options = Options()
-        # Enable headless mode for Linux/CI execution environments
-        self.firefox_options.add_argument("--headless")
-        # Prevent Firefox from looking for an existing instance to reuse.
-        # In a container each scan spawns a fresh process; without this flag
-        # Firefox may hang trying to contact a non-existent prior session.
-        self.firefox_options.add_argument("-no-remote")
-        self.firefox_options.set_preference(
-            "general.useragent.override", 
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:123.0) Gecko/20100101 Firefox/123.0"
-        )
-        # Disable Firefox's internal multi-process content sandbox.
-        # In a hardened container (cap_drop: ALL, read_only filesystem) the
-        # sandbox requires kernel capabilities we intentionally do not grant.
-        # The Docker container itself is the security boundary.
-        self.firefox_options.set_preference("security.sandbox.content.level", 0)
-        self.firefox_options.set_preference("security.sandbox.gpu.level", 0)
-        # Disable GPU hardware acceleration. Containers have no real GPU and the
-        # GPU compositor process crashes silently, which surfaces as a marionette
-        # decode error. Software rendering is slower but stable in headless mode.
-        self.firefox_options.set_preference("layers.acceleration.disabled", True)
-        self.firefox_options.set_preference("webgl.disabled", True)
-        self.firefox_options.set_preference("media.hardware-video-decoding.enabled", False)
-        # Hide the navigator.webdriver property that anti-bot systems (e.g. Akamai)
-        # check to detect Selenium-controlled browsers. This makes the session
-        # look indistinguishable from a regular manual browsing session.
-        self.firefox_options.set_preference("dom.webdriver.enabled", False)
-        self.firefox_options.set_preference("useAutomationExtension", False)
+        self.session = requests.Session()
+        self.session.headers.update({
+            # Accept header exactly as Firefox sends it
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+            "Accept-Language": "es-MX,es;q=0.9,en-US;q=0.7,en;q=0.6",
+            "Accept-Encoding": "gzip, deflate, br",
+            "Connection": "keep-alive",
+            "Upgrade-Insecure-Requests": "1",
+            "Cache-Control": "max-age=0",
+            # Fetch metadata headers (sent by modern Firefox)
+            "Sec-Fetch-Dest": "document",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Site": "none",
+            "Sec-Fetch-User": "?1",
+        })
 
-    def fetch_page_content(self) -> str:
-        """Opens a headless browser to render the page and get the HTML.
+    def fetch_page_content(self) -> str | None:
+        """Fetches the page HTML via an HTTP GET request.
+
+        A random User-Agent is chosen per request and a small random delay is
+        applied to avoid fixed-timing fingerprinting. Both measures make the
+        traffic pattern less distinguishable from organic browser sessions.
 
         Returns:
-            str: The raw HTML content string of the loaded page, or None if it fails.
+            str: The raw HTML content of the page, or None on failure.
         """
-        logger.info(f"Opening headless Firefox browser to: {self.target_url}")
-        
-        try:
-            # geckodriver is baked into the image at /usr/local/bin/geckodriver
-            service = Service("/usr/local/bin/geckodriver")
-            driver = webdriver.Firefox(service=service, options=self.firefox_options)
-        except Exception as init_error:
-            logger.error(f"Failed to initialize Firefox WebDriver: {init_error}", exc_info=True)
-            return None
+        # Pick a fresh User-Agent for each request
+        self.session.headers["User-Agent"] = random.choice(_USER_AGENTS)
 
+        logger.info(f"Fetching: {self.target_url}")
         try:
-            driver.get(self.target_url)
-            # Wait a randomized amount of time for JS to render product listings.
-            # A fixed delay (e.g. always 5s) creates a detectable timing fingerprint;
-            # a human never loads pages at perfectly consistent intervals.
-            wait_seconds = random.uniform(4.0, 9.0)
-            logger.debug(f"Waiting {wait_seconds:.1f}s for page JS to render...")
-            time.sleep(wait_seconds)
-            html = driver.page_source
-            logger.info("Successfully fetched page source.")
-            return html
-        except Exception as fetch_error:
-            logger.error(f"Error fetching page content via Selenium: {fetch_error}", exc_info=True)
+            response = self.session.get(
+                self.target_url,
+                timeout=30,
+                allow_redirects=True,
+            )
+            response.raise_for_status()
+            logger.info(f"Response: HTTP {response.status_code} ({len(response.text)} chars)")
+            return response.text
+        except requests.RequestException as e:
+            logger.error(f"Failed to fetch {self.target_url}: {e}")
             return None
-        finally:
-            # Ensure the browser is always quit to prevent process/RAM leakage
-            driver.quit()
-            logger.info("Firefox WebDriver closed.")
 
     def analyze_merca_libre(self, html_content: str) -> list:
         """Parses Mercado Libre product listings from HTML.
@@ -117,16 +105,17 @@ class ProductScraper:
             html_content (str): The raw HTML page source.
 
         Returns:
-            list: A list of dictionaries, each containing 'name', 'price', and 'link'.
+            list: Dictionaries with 'name', 'price', and 'link' for each
+                  console listing that passes the blacklist filter.
         """
-        soup = BeautifulSoup(html_content, 'html.parser')
+        soup = BeautifulSoup(html_content, "html.parser")
         products = []
-        
+
         # Target the main product cards
-        items = soup.find_all(['div', 'li'], class_=['poly-card', 'ui-search-result__wrapper'])
+        items = soup.find_all(["div", "li"], class_=["poly-card", "ui-search-result__wrapper"])
 
         for item in items:
-            name_element = item.find('a', class_='poly-component__title') or item.find('h2')
+            name_element = item.find("a", class_="poly-component__title") or item.find("h2")
 
             if not name_element:
                 continue
@@ -140,23 +129,23 @@ class ProductScraper:
 
             # Avoid picking up monthly installments or discount percentages
             price_container = (
-                item.find('div', class_='poly-price__current')
-                or item.find('div', class_='ui-search-price__second-line')
+                item.find("div", class_="poly-price__current")
+                or item.find("div", class_="ui-search-price__second-line")
             )
 
             if price_container:
-                price_element = price_container.find('span', class_='andes-money-amount__fraction')
+                price_element = price_container.find("span", class_="andes-money-amount__fraction")
             else:
-                price_element = item.find('span', class_='andes-money-amount__fraction')
+                price_element = item.find("span", class_="andes-money-amount__fraction")
 
-            link_element = item.find('a', href=True)
+            link_element = item.find("a", href=True)
 
             if price_element:
                 price_text = price_element.get_text().strip()
                 products.append({
                     "name": name_text,
                     "price": price_text,
-                    "link": link_element['href'] if link_element else self.target_url,
+                    "link": link_element["href"] if link_element else self.target_url,
                 })
 
         return products
@@ -168,19 +157,19 @@ class ProductScraper:
             name (str): The product listing name to evaluate.
 
         Returns:
-            bool: True when the product should be discarded, False when it can pass.
+            bool: True when the product should be discarded.
         """
         name_lower = name.lower()
         return any(keyword in name_lower for keyword in BLACKLIST_KEYWORDS)
 
     def analyze_prices(self, html_content: str) -> list:
-        """Generic fallback parser or placeholder for other marketplaces like eBay.
+        """Generic fallback parser for non-Mercado Libre marketplaces.
 
         Args:
             html_content (str): The raw HTML page source.
 
         Returns:
-            list: Empty list (to be implemented with specific marketplace parser).
+            list: Empty list (placeholder for future marketplace support).
         """
         logger.warning("Generic analyze_prices called but not implemented yet.")
-        return []
+        return []
