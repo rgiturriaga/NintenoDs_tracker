@@ -56,6 +56,10 @@ services:
     # kernel-level privilege.
     cap_drop:
       - ALL
+    # SYS_PTRACE is the only capability Firefox needs even with its internal
+    # sandbox disabled. It uses ptrace to monitor its own child processes.
+    cap_add:
+      - SYS_PTRACE
 
     # Make the container filesystem read-only. An attacker who gets code
     # execution cannot write a backdoor, drop a cron job, or modify

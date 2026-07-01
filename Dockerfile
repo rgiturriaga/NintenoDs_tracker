@@ -5,10 +5,18 @@ FROM python:3.11-slim
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
-# --- System dependencies (installed as root) ---
+# --- System dependencies ---
+# wget is a small tool; --no-install-recommends is fine for it.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    firefox-esr \
     wget \
+    && rm -rf /var/lib/apt/lists/*
+
+# Firefox ESR is installed WITHOUT --no-install-recommends so that apt also
+# pulls in all recommended packages. Firefox dynamically loads libraries like
+# libasound2, libpulse0, libxt6, and font packages at startup. If they are
+# missing it crashes immediately with 'Failed to decode response from marionette'.
+RUN apt-get update && apt-get install -y \
+    firefox-esr \
     && rm -rf /var/lib/apt/lists/*
 
 # --- Install geckodriver at build time (pre-pinned version) ---
