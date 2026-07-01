@@ -46,10 +46,14 @@ services:
     # Security hardening
     # ---------------------------------------------------------------
 
-    # Prevent any process inside the container from gaining new privileges
-    # via setuid/setgid binaries or file capabilities.
+    # no-new-privileges: blocks setuid/setgid privilege escalation.
+    # seccomp=unconfined: Docker's default seccomp profile blocks clone3 and
+    # other syscalls Firefox uses to spawn its internal processes, causing
+    # an immediate crash ("Failed to decode response from marionette").
+    # The container remains isolated via cap_drop, non-root user, and limits.
     security_opt:
       - no-new-privileges:true
+      - seccomp=unconfined
 
     # Drop every Linux capability. The bot only does HTTP requests and
     # file reads — it does not need raw sockets, mounting, or any

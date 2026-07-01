@@ -84,11 +84,9 @@ class ProductScraper:
         logger.info(f"Opening headless Firefox browser to: {self.target_url}")
         
         try:
-            # If a pre-installed geckodriver is available (e.g. inside Docker), use it
-            # directly to avoid a network download at startup. Fall back to
-            # webdriver_manager for local development environments.
-            gecko_path = os.getenv("GECKODRIVER_PATH")
-            service = Service(gecko_path) if gecko_path else Service(GeckoDriverManager().install())
+            # geckodriver is installed via apt at /usr/bin/geckodriver and is
+            # on PATH, so Service() finds it automatically without an explicit path.
+            service = Service()
             driver = webdriver.Firefox(service=service, options=self.firefox_options)
         except Exception as init_error:
             logger.error(f"Failed to initialize Firefox WebDriver: {init_error}", exc_info=True)
