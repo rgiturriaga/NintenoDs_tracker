@@ -63,6 +63,12 @@ class ProductScraper:
         # The Docker container itself is the security boundary.
         self.firefox_options.set_preference("security.sandbox.content.level", 0)
         self.firefox_options.set_preference("security.sandbox.gpu.level", 0)
+        # Disable GPU hardware acceleration. Containers have no real GPU and the
+        # GPU compositor process crashes silently, which surfaces as a marionette
+        # decode error. Software rendering is slower but stable in headless mode.
+        self.firefox_options.set_preference("layers.acceleration.disabled", True)
+        self.firefox_options.set_preference("webgl.disabled", True)
+        self.firefox_options.set_preference("media.hardware-video-decoding.enabled", False)
         # Hide the navigator.webdriver property that anti-bot systems (e.g. Akamai)
         # check to detect Selenium-controlled browsers. This makes the session
         # look indistinguishable from a regular manual browsing session.

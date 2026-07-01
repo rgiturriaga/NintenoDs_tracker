@@ -6,17 +6,18 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
 # --- System dependencies ---
-# wget is a small tool; --no-install-recommends is fine for it.
+# Firefox is installed with --no-install-recommends to keep the image small,
+# but we explicitly add the packages it needs at runtime that are only
+# "recommended" by apt yet cause a hard crash if missing:
+#   fonts-liberation   - Firefox crashes on startup with no fonts available
+#   libdbus-glib-1-2   - D-Bus GLib bindings used for internal IPC
+#   libasound2t64      - ALSA library Firefox links against even in headless mode
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    wget \
-    && rm -rf /var/lib/apt/lists/*
-
-# Firefox ESR is installed WITHOUT --no-install-recommends so that apt also
-# pulls in all recommended packages. Firefox dynamically loads libraries like
-# libasound2, libpulse0, libxt6, and font packages at startup. If they are
-# missing it crashes immediately with 'Failed to decode response from marionette'.
-RUN apt-get update && apt-get install -y \
     firefox-esr \
+    wget \
+    fonts-liberation \
+    libdbus-glib-1-2 \
+    libasound2t64 \
     && rm -rf /var/lib/apt/lists/*
 
 # --- Install geckodriver at build time (pre-pinned version) ---
