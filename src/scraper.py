@@ -84,9 +84,8 @@ class ProductScraper:
         logger.info(f"Opening headless Firefox browser to: {self.target_url}")
         
         try:
-            # geckodriver is installed via apt at /usr/bin/geckodriver and is
-            # on PATH, so Service() finds it automatically without an explicit path.
-            service = Service()
+            # geckodriver is baked into the image at /usr/local/bin/geckodriver
+            service = Service("/usr/local/bin/geckodriver")
             driver = webdriver.Firefox(service=service, options=self.firefox_options)
         except Exception as init_error:
             logger.error(f"Failed to initialize Firefox WebDriver: {init_error}", exc_info=True)
