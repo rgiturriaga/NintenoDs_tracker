@@ -1,11 +1,11 @@
+import random
 import logging
 import requests
-from urllib.parse import urlparse
+from bs4 import BeautifulSoup
 
 logger = logging.getLogger(__name__)
 
 # Words that identify non-console listings (games, accessories, spare parts).
-# Any product whose name contains one of these terms is discarded.
 BLACKLIST_KEYWORDS: frozenset[str] = frozenset({
     # Games / software
     "juego", "game", "games", "cartucho", "cartridge", "rom",
@@ -24,99 +24,164 @@ BLACKLIST_KEYWORDS: frozenset[str] = frozenset({
     "manual", "instrucciones",
 })
 
-# Mercado Libre public search API — no authentication required.
-# Site ID for Mexico is MLM.
-_ML_API_URL = "https://api.mercadolibre.com/sites/MLM/search"
+# Rotate between realistic User-Agent strings to avoid fixed fingerprinting.
+_USER_AGENTS: list[str] = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:123.0) Gecko/20100101 Firefox/123.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7; rv:124.0) Gecko/20100101 Firefox/124.0",
+    "Mozilla/5.0 (X11; Linux x86_64; rv:123.0) Gecko/20100101 Firefox/123.0",
+]
 
 
 class ProductScraper:
-    """Scraper backed by the official Mercado Libre public search API.
+    """Scraper that fetches Mercado Libre listing pages via HTTP requests.
 
-    The API returns structured JSON directly, bypassing all HTML scraping
-    and bot-detection (Akamai) that blocks plain HTTP requests to the
-    listing pages. No browser is needed.
+    brotlicffi must be installed so that urllib3 can automatically decompress
+    the brotli-encoded responses that Mercado Libre returns. Without it,
+    response.text contains raw compressed bytes that BeautifulSoup cannot parse.
 
     Attributes:
-        target_url (str): The original listing URL (kept for logging/links).
-        search_query (str): Search term derived from the URL path.
+        target_url (str): The marketplace listing URL to scrape.
+        session (requests.Session): Persistent HTTP session with browser headers.
     """
 
     def __init__(self, target_url: str):
-        """Initializes the scraper, deriving the search query from the URL.
-
-        The URL path segment is used as the search query so that the existing
-        .env TARGET_URL values continue to work without any changes:
-            https://listado.mercadolibre.com.mx/nintendo-ds  ->  "nintendo ds"
-            https://listado.mercadolibre.com.mx/nintendo-3ds ->  "nintendo 3ds"
+        """Initializes the scraper with a target URL and a browser-like session.
 
         Args:
-            target_url (str): The marketplace listing URL from configuration.
+            target_url (str): The target marketplace URL.
         """
         self.target_url = target_url
-        # Extract the last path segment and convert hyphens to spaces
-        path_segment = urlparse(target_url).path.strip("/").split("/")[-1]
-        self.search_query = path_segment.replace("-", " ")
+        self.session = requests.Session()
+        self.session.headers.update({
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+            "Accept-Language": "es-MX,es;q=0.9,en-US;q=0.7,en;q=0.6",
+            # 'br' is safe here because brotlicffi is installed and urllib3
+            # detects it automatically to decompress brotli responses.
+            "Accept-Encoding": "gzip, deflate, br",
+            "Connection": "keep-alive",
+            "Upgrade-Insecure-Requests": "1",
+            "Cache-Control": "max-age=0",
+            "Sec-Fetch-Dest": "document",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Site": "none",
+            "Sec-Fetch-User": "?1",
+        })
 
     def fetch_listings(self) -> list:
-        """Searches Mercado Libre via the public API and returns filtered products.
-
-        Makes a single GET request to the ML API with the derived search query.
-        Results are filtered by the blacklist before being returned. Price
-        filtering happens in main.py after all URLs have been aggregated.
+        """Public interface: fetches the page and returns filtered products.
 
         Returns:
-            list: Dictionaries with 'name', 'price' (string), and 'link'
-                  for each console listing that passes the blacklist filter.
-                  Returns an empty list on network errors or no results.
+            list: Dictionaries with 'name', 'price', and 'link'.
         """
-        logger.info(f"API search for: '{self.search_query}'")
+        html = self._fetch_page_content()
+        if not html:
+            return []
+        return self._analyze_merca_libre(html)
+
+    def _fetch_page_content(self) -> str | None:
+        """Fetches the page HTML via an HTTP GET request.
+
+        brotlicffi enables automatic brotli decompression in urllib3, so
+        response.text always returns a valid UTF-8 string regardless of
+        the Content-Encoding the server chose.
+
+        Returns:
+            str: The raw HTML content of the page, or None on failure.
+        """
+        self.session.headers["User-Agent"] = random.choice(_USER_AGENTS)
+        logger.info(f"Fetching: {self.target_url}")
         try:
-            response = requests.get(
-                _ML_API_URL,
-                params={"q": self.search_query, "limit": 48},
-                headers={
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0",
-                    "Accept": "application/json",
-                },
-                timeout=15,
+            response = self.session.get(
+                self.target_url,
+                timeout=30,
+                allow_redirects=True,
             )
             response.raise_for_status()
-            data = response.json()
+            logger.info(
+                f"Response: HTTP {response.status_code} "
+                f"({len(response.text)} chars, "
+                f"encoding={response.headers.get('content-encoding', 'none')})"
+            )
+            return response.text
         except requests.RequestException as e:
-            logger.error(f"ML API request failed for '{self.search_query}': {e}")
+            logger.error(f"Failed to fetch {self.target_url}: {e}")
+            return None
+
+    def _analyze_merca_libre(self, html_content: str) -> list:
+        """Parses Mercado Libre product listings from HTML.
+
+        Tries CSS selector strategies from newest to oldest since the SSR
+        markup may differ from the JS-hydrated version.
+
+        Args:
+            html_content (str): The raw HTML page source.
+
+        Returns:
+            list: Filtered product dictionaries.
+        """
+        soup = BeautifulSoup(html_content, "html.parser")
+
+        # Log first 400 chars to identify page structure in docker logs.
+        snippet = " ".join(html_content[:400].split())
+        logger.info(f"HTML preview: {snippet}")
+
+        # Strategy 1: poly-card / ui-search-result__wrapper (2024+ structure).
+        # Two separate calls combined with + to get OR behaviour without lambdas.
+        items = soup.find_all(["div", "li"], class_="poly-card")
+        items += soup.find_all(["div", "li"], class_="ui-search-result__wrapper")
+        logger.info(f"Strategy 1 (poly-card): {len(items)} item(s)")
+
+        if not items:
+            # Strategy 2: classic SSR layout item
+            items = soup.find_all("li", class_="ui-search-layout__item")
+            logger.info(f"Strategy 2 (layout__item): {len(items)} item(s)")
+
+        if not items:
+            # Strategy 3: CSS attribute substring selector — matches any element
+            # whose class attribute contains the text 'ui-search-result'.
+            items = soup.select("[class*='ui-search-result']")
+            logger.info(f"Strategy 3 (ui-search-result*): {len(items)} item(s)")
+
+        if not items:
+            logger.warning(
+                f"No items found in {len(html_content)} chars. "
+                "Page may be bot-detected or HTML structure changed."
+            )
             return []
 
-        raw_items = data.get("results", [])
-        logger.info(f"API returned {len(raw_items)} raw item(s)")
-
         products = []
-        for item in raw_items:
-            title = item.get("title", "")
-            price = item.get("price")
-
-            if price is None:
+        for item in items:
+            name_element = (
+                item.find("a", class_="poly-component__title")
+                or item.find("a", class_="ui-search-item__title-label")
+                or item.find("h2", class_="ui-search-item__title")
+                or item.find("h2")
+            )
+            if not name_element:
                 continue
-            if self._is_excluded(title):
-                logger.debug(f"Excluded by blacklist: '{title}'")
+
+            name_text = name_element.get_text().strip()
+            if self._is_excluded(name_text):
+                logger.debug(f"Excluded by blacklist: '{name_text}'")
                 continue
 
-            products.append({
-                "name": title,
-                # Store as integer string so main.py price parsing stays the same
-                "price": str(int(price)),
-                "link": item.get("permalink", self.target_url),
-            })
+            price_element = (
+                item.find("span", class_="andes-money-amount__fraction")
+                or item.find("span", class_="price-tag-fraction")
+            )
+            link_element = item.find("a", href=True)
+
+            if price_element:
+                products.append({
+                    "name": name_text,
+                    "price": price_element.get_text().strip(),
+                    "link": link_element["href"] if link_element else self.target_url,
+                })
 
         return products
 
     def _is_excluded(self, name: str) -> bool:
-        """Returns True if the product name matches a blacklisted keyword.
-
-        Args:
-            name (str): The product listing name to evaluate.
-
-        Returns:
-            bool: True when the product should be discarded.
-        """
+        """Returns True if the product name matches a blacklisted keyword."""
         name_lower = name.lower()
         return any(keyword in name_lower for keyword in BLACKLIST_KEYWORDS)

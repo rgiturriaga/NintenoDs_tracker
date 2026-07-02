@@ -1,5 +1,6 @@
 # HTTP client and HTML parsing
 requests
+brotlicffi   # enables automatic brotli decompression in urllib3/requests
 beautifulsoup4
 
 # Environment variables
