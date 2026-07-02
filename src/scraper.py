@@ -60,7 +60,12 @@ class ProductScraper:
             # Accept header exactly as Firefox sends it
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
             "Accept-Language": "es-MX,es;q=0.9,en-US;q=0.7,en;q=0.6",
-            "Accept-Encoding": "gzip, deflate, br",
+            # Do NOT include 'br' (brotli) here. requests has no native brotli
+            # support; if the server sends brotli-encoded content the response
+            # arrives as raw compressed binary, which BeautifulSoup cannot parse.
+            # Omitting 'br' forces the server to use gzip, which requests
+            # decompresses automatically.
+            "Accept-Encoding": "gzip, deflate",
             "Connection": "keep-alive",
             "Upgrade-Insecure-Requests": "1",
             "Cache-Control": "max-age=0",
