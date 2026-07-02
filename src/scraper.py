@@ -74,7 +74,10 @@ class ProductScraper:
             response = requests.get(
                 _ML_API_URL,
                 params={"q": self.search_query, "limit": 48},
-                headers={"User-Agent": "NintendoDsTracker/1.0"},
+                headers={
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0",
+                    "Accept": "application/json",
+                },
                 timeout=15,
             )
             response.raise_for_status()
