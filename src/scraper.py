@@ -101,6 +101,9 @@ class ProductScraper:
     def analyze_merca_libre(self, html_content: str) -> list:
         """Parses Mercado Libre product listings from HTML.
 
+        Tries multiple CSS selector strategies in order from newest to oldest,
+        since Mercado Libre's SSR markup differs from the JS-hydrated version.
+
         Args:
             html_content (str): The raw HTML page source.
 
@@ -109,46 +112,70 @@ class ProductScraper:
                   console listing that passes the blacklist filter.
         """
         soup = BeautifulSoup(html_content, "html.parser")
-        products = []
 
-        # Target the main product cards
+        # Log the first 400 characters so we can identify the actual page
+        # structure (or a bot-detection page) directly from docker logs.
+        snippet = " ".join(html_content[:400].split())
+        logger.info(f"HTML preview: {snippet}")
+
+        # --- Selector strategy cascade ---
+        # Strategy 1: poly-card / ui-search-result__wrapper (2024+ structure)
         items = soup.find_all(["div", "li"], class_=["poly-card", "ui-search-result__wrapper"])
+        logger.info(f"Strategy 1 (poly-card): {len(items)} item(s)")
 
+        if not items:
+            # Strategy 2: Classic SSR layout item (older structure, still used in SSR)
+            items = soup.find_all("li", class_="ui-search-layout__item")
+            logger.info(f"Strategy 2 (layout__item): {len(items)} item(s)")
+
+        if not items:
+            # Strategy 3: Any element with ui-search-result in the class
+            items = soup.find_all(True, class_=lambda c: c and "ui-search-result" in c)
+            logger.info(f"Strategy 3 (ui-search-result*): {len(items)} item(s)")
+
+        if not items:
+            logger.warning(
+                f"No items found in {len(html_content)} chars. "
+                "Page may be bot-detected or Mercado Libre changed its HTML structure."
+            )
+            return []
+
+        products = []
         for item in items:
-            name_element = item.find("a", class_="poly-component__title") or item.find("h2")
+            # Try multiple title selectors (newest to oldest)
+            name_element = (
+                item.find("a", class_="poly-component__title")
+                or item.find("a", class_="ui-search-item__title-label")
+                or item.find("h2", class_="ui-search-item__title")
+                or item.find("h2")
+            )
 
             if not name_element:
                 continue
 
             name_text = name_element.get_text().strip()
 
-            # Skip games, accessories, spare parts, etc.
             if self._is_excluded(name_text):
                 logger.debug(f"Excluded by blacklist: '{name_text}'")
                 continue
 
-            # Avoid picking up monthly installments or discount percentages
-            price_container = (
-                item.find("div", class_="poly-price__current")
-                or item.find("div", class_="ui-search-price__second-line")
+            # Try multiple price selectors
+            price_element = (
+                item.find("span", class_="andes-money-amount__fraction")
+                or item.find("span", class_="price-tag-fraction")
             )
-
-            if price_container:
-                price_element = price_container.find("span", class_="andes-money-amount__fraction")
-            else:
-                price_element = item.find("span", class_="andes-money-amount__fraction")
 
             link_element = item.find("a", href=True)
 
             if price_element:
-                price_text = price_element.get_text().strip()
                 products.append({
                     "name": name_text,
-                    "price": price_text,
+                    "price": price_element.get_text().strip(),
                     "link": link_element["href"] if link_element else self.target_url,
                 })
 
         return products
+
 
     def _is_excluded(self, name: str) -> bool:
         """Returns True if the product name matches a blacklisted keyword.
