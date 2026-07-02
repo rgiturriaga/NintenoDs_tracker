@@ -80,7 +80,8 @@ def run_monitor_loop(
     for url in target_urls:
         logger.info(f"  -> {url}")
 
-    # Create one scraper instance per URL (each has its own Firefox options)
+    # Create one scraper instance per URL. Each instance derives its API
+    # search query automatically from the URL path.
     scrapers = [(url, ProductScraper(url)) for url in target_urls]
 
     while not stop_event.is_set():
@@ -115,17 +116,9 @@ def run_monitor_loop(
             all_products = []
             for url, scraper in scrapers:
                 logger.info(f"Fetching: {url}")
-                html_content = scraper.fetch_page_content()
-
-                if html_content:
-                    if "mercadolibre" in url:
-                        products = scraper.analyze_merca_libre(html_content)
-                    else:
-                        products = scraper.analyze_prices(html_content)
-                    logger.info(f"  {len(products)} listing(s) after filtering from {url}")
-                    all_products.extend(products)
-                else:
-                    logger.warning(f"Could not fetch content from {url}")
+                products = scraper.fetch_listings()
+                logger.info(f"  {len(products)} listing(s) after filtering from {url}")
+                all_products.extend(products)
 
             logger.info(f"Total listings this cycle: {len(all_products)}")
 

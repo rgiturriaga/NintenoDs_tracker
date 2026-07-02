@@ -1,7 +1,6 @@
-import random
 import logging
 import requests
-from bs4 import BeautifulSoup
+from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
@@ -25,162 +24,87 @@ BLACKLIST_KEYWORDS: frozenset[str] = frozenset({
     "manual", "instrucciones",
 })
 
-# Rotate between a few realistic User-Agent strings to reduce fingerprinting.
-_USER_AGENTS: list[str] = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:123.0) Gecko/20100101 Firefox/123.0",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7; rv:124.0) Gecko/20100101 Firefox/124.0",
-    "Mozilla/5.0 (X11; Linux x86_64; rv:123.0) Gecko/20100101 Firefox/123.0",
-]
+# Mercado Libre public search API — no authentication required.
+# Site ID for Mexico is MLM.
+_ML_API_URL = "https://api.mercadolibre.com/sites/MLM/search"
 
 
 class ProductScraper:
-    """Scraper that fetches Mercado Libre listing pages via HTTP requests.
+    """Scraper backed by the official Mercado Libre public search API.
 
-    Mercado Libre uses server-side rendering (Next.js SSR), so product listings
-    are embedded in the initial HTML response and do not require JavaScript
-    execution. Using requests instead of a headless browser avoids the
-    Firefox/geckodriver stack entirely, reducing memory use and removing all
-    container compatibility issues.
+    The API returns structured JSON directly, bypassing all HTML scraping
+    and bot-detection (Akamai) that blocks plain HTTP requests to the
+    listing pages. No browser is needed.
 
     Attributes:
-        target_url (str): The marketplace listing URL to scrape.
-        session (requests.Session): Persistent HTTP session with browser headers.
+        target_url (str): The original listing URL (kept for logging/links).
+        search_query (str): Search term derived from the URL path.
     """
 
     def __init__(self, target_url: str):
-        """Initializes the scraper with a target URL and a configured HTTP session.
+        """Initializes the scraper, deriving the search query from the URL.
+
+        The URL path segment is used as the search query so that the existing
+        .env TARGET_URL values continue to work without any changes:
+            https://listado.mercadolibre.com.mx/nintendo-ds  ->  "nintendo ds"
+            https://listado.mercadolibre.com.mx/nintendo-3ds ->  "nintendo 3ds"
 
         Args:
-            target_url (str): The target marketplace URL.
+            target_url (str): The marketplace listing URL from configuration.
         """
         self.target_url = target_url
-        self.session = requests.Session()
-        self.session.headers.update({
-            # Accept header exactly as Firefox sends it
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-            "Accept-Language": "es-MX,es;q=0.9,en-US;q=0.7,en;q=0.6",
-            # Do NOT include 'br' (brotli) here. requests has no native brotli
-            # support; if the server sends brotli-encoded content the response
-            # arrives as raw compressed binary, which BeautifulSoup cannot parse.
-            # Omitting 'br' forces the server to use gzip, which requests
-            # decompresses automatically.
-            "Accept-Encoding": "gzip, deflate",
-            "Connection": "keep-alive",
-            "Upgrade-Insecure-Requests": "1",
-            "Cache-Control": "max-age=0",
-            # Fetch metadata headers (sent by modern Firefox)
-            "Sec-Fetch-Dest": "document",
-            "Sec-Fetch-Mode": "navigate",
-            "Sec-Fetch-Site": "none",
-            "Sec-Fetch-User": "?1",
-        })
+        # Extract the last path segment and convert hyphens to spaces
+        path_segment = urlparse(target_url).path.strip("/").split("/")[-1]
+        self.search_query = path_segment.replace("-", " ")
 
-    def fetch_page_content(self) -> str | None:
-        """Fetches the page HTML via an HTTP GET request.
+    def fetch_listings(self) -> list:
+        """Searches Mercado Libre via the public API and returns filtered products.
 
-        A random User-Agent is chosen per request and a small random delay is
-        applied to avoid fixed-timing fingerprinting. Both measures make the
-        traffic pattern less distinguishable from organic browser sessions.
+        Makes a single GET request to the ML API with the derived search query.
+        Results are filtered by the blacklist before being returned. Price
+        filtering happens in main.py after all URLs have been aggregated.
 
         Returns:
-            str: The raw HTML content of the page, or None on failure.
+            list: Dictionaries with 'name', 'price' (string), and 'link'
+                  for each console listing that passes the blacklist filter.
+                  Returns an empty list on network errors or no results.
         """
-        # Pick a fresh User-Agent for each request
-        self.session.headers["User-Agent"] = random.choice(_USER_AGENTS)
-
-        logger.info(f"Fetching: {self.target_url}")
+        logger.info(f"API search for: '{self.search_query}'")
         try:
-            response = self.session.get(
-                self.target_url,
-                timeout=30,
-                allow_redirects=True,
+            response = requests.get(
+                _ML_API_URL,
+                params={"q": self.search_query, "limit": 48},
+                headers={"User-Agent": "NintendoDsTracker/1.0"},
+                timeout=15,
             )
             response.raise_for_status()
-            logger.info(f"Response: HTTP {response.status_code} ({len(response.text)} chars)")
-            return response.text
+            data = response.json()
         except requests.RequestException as e:
-            logger.error(f"Failed to fetch {self.target_url}: {e}")
-            return None
-
-    def analyze_merca_libre(self, html_content: str) -> list:
-        """Parses Mercado Libre product listings from HTML.
-
-        Tries multiple CSS selector strategies in order from newest to oldest,
-        since Mercado Libre's SSR markup differs from the JS-hydrated version.
-
-        Args:
-            html_content (str): The raw HTML page source.
-
-        Returns:
-            list: Dictionaries with 'name', 'price', and 'link' for each
-                  console listing that passes the blacklist filter.
-        """
-        soup = BeautifulSoup(html_content, "html.parser")
-
-        # Log the first 400 characters so we can identify the actual page
-        # structure (or a bot-detection page) directly from docker logs.
-        snippet = " ".join(html_content[:400].split())
-        logger.info(f"HTML preview: {snippet}")
-
-        # --- Selector strategy cascade ---
-        # Strategy 1: poly-card / ui-search-result__wrapper (2024+ structure)
-        items = soup.find_all(["div", "li"], class_=["poly-card", "ui-search-result__wrapper"])
-        logger.info(f"Strategy 1 (poly-card): {len(items)} item(s)")
-
-        if not items:
-            # Strategy 2: Classic SSR layout item (older structure, still used in SSR)
-            items = soup.find_all("li", class_="ui-search-layout__item")
-            logger.info(f"Strategy 2 (layout__item): {len(items)} item(s)")
-
-        if not items:
-            # Strategy 3: Any element with ui-search-result in the class
-            items = soup.find_all(True, class_=lambda c: c and "ui-search-result" in c)
-            logger.info(f"Strategy 3 (ui-search-result*): {len(items)} item(s)")
-
-        if not items:
-            logger.warning(
-                f"No items found in {len(html_content)} chars. "
-                "Page may be bot-detected or Mercado Libre changed its HTML structure."
-            )
+            logger.error(f"ML API request failed for '{self.search_query}': {e}")
             return []
 
+        raw_items = data.get("results", [])
+        logger.info(f"API returned {len(raw_items)} raw item(s)")
+
         products = []
-        for item in items:
-            # Try multiple title selectors (newest to oldest)
-            name_element = (
-                item.find("a", class_="poly-component__title")
-                or item.find("a", class_="ui-search-item__title-label")
-                or item.find("h2", class_="ui-search-item__title")
-                or item.find("h2")
-            )
+        for item in raw_items:
+            title = item.get("title", "")
+            price = item.get("price")
 
-            if not name_element:
+            if price is None:
+                continue
+            if self._is_excluded(title):
+                logger.debug(f"Excluded by blacklist: '{title}'")
                 continue
 
-            name_text = name_element.get_text().strip()
-
-            if self._is_excluded(name_text):
-                logger.debug(f"Excluded by blacklist: '{name_text}'")
-                continue
-
-            # Try multiple price selectors
-            price_element = (
-                item.find("span", class_="andes-money-amount__fraction")
-                or item.find("span", class_="price-tag-fraction")
-            )
-
-            link_element = item.find("a", href=True)
-
-            if price_element:
-                products.append({
-                    "name": name_text,
-                    "price": price_element.get_text().strip(),
-                    "link": link_element["href"] if link_element else self.target_url,
-                })
+            products.append({
+                "name": title,
+                # Store as integer string so main.py price parsing stays the same
+                "price": str(int(price)),
+                "link": item.get("permalink", self.target_url),
+            })
 
         return products
-
 
     def _is_excluded(self, name: str) -> bool:
         """Returns True if the product name matches a blacklisted keyword.
@@ -193,15 +117,3 @@ class ProductScraper:
         """
         name_lower = name.lower()
         return any(keyword in name_lower for keyword in BLACKLIST_KEYWORDS)
-
-    def analyze_prices(self, html_content: str) -> list:
-        """Generic fallback parser for non-Mercado Libre marketplaces.
-
-        Args:
-            html_content (str): The raw HTML page source.
-
-        Returns:
-            list: Empty list (placeholder for future marketplace support).
-        """
-        logger.warning("Generic analyze_prices called but not implemented yet.")
-        return []
